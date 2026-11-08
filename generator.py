@@ -156,7 +156,7 @@ def localConstraints(nqa, nra: Tuple[Point, Point],
         retval = PointState.REJECTED
     if reason is not None and show_reason:
         print(reason)
-    return nra, retval
+    return nnra, retval
 
 
 def globalGoals(rq: RoadQuery):
@@ -201,11 +201,13 @@ if __name__ == '__main__':
         counter += 1
 
         # Draw the current city. Yes, this is inefficient, shut up.
+        """
         for rq in pqueue:
             s = rq.ra
             pygame.draw.line(canvas, (150, 150, 150),
                              (s[0].x, s[0].y), (s[1].x, s[1].y),
                              width=1)
+        """
         for s in segment_list:
             pygame.draw.line(canvas, 'white',
                              (s[0].x, s[0].y), (s[1].x, s[1].y),
@@ -232,7 +234,7 @@ if __name__ == '__main__':
 
         screen.blit(canvas, (0, 0))
         pygame.display.flip()
-        move_on = False
+        move_on = True
         while not move_on:
             events = pygame.event.get()
             for e in events:
@@ -241,4 +243,4 @@ if __name__ == '__main__':
     screen.blit(canvas, (0, 0))
     pygame.display.flip()
     import time
-    time.sleep(1)
+    time.sleep(5)
