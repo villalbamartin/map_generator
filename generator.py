@@ -1,5 +1,3 @@
-from dataclasses import dataclass
-from enum import Enum
 from typing import Tuple
 import heapq
 import math
@@ -7,63 +5,17 @@ import pygame
 import random
 import time
 
-from collections import namedtuple
+from custom_classes import PointState, Point, RoadQuery, intersect
+
 
 # https://nothings.org/gamedev/l_systems.html
 
 
-class PointState(Enum):
-    ACCEPTED = 0
-    REJECTED = 1
-    NO_BRANCH = 2
-
-
-@dataclass(order=True)
-class Point:
-    x: int
-    y: int
-
-    def dist(self, other):
-        return math.sqrt(math.pow(other.x - self.x, 2) + math.pow(other.y - self.y, 2))
-
-
-def ccw(a:Point, b:Point, c:Point) -> bool:
-    # SO: 9997374
-    return (c.y - a.y) * (b.x - a.x) > (b.y - a.y) * (c.x - a.x)
-
-
-def intersect(a, b, c, d):
-    """ Returns True if AB intersects CD
-
-    Parameters
-    ----------
-    a : Point
-    b : Point
-    c : Point
-    d : Point
-
-    Returns
-    -------
-    bool
-    """
-    if (a.x == c.x and a.y == c.y) or (a.x == d.x and a.y == d.y) or \
-        (b.x == c.x and b.y == c.y) or (b.x == d.x and b.y == d.y):
-        # Shared vertex doesn't count
-        return False
-    return ccw(a, c, d) != ccw(b, c, d) and ccw(a, b, c) != ccw(a, b, d)
-
-
-@dataclass(order=True)
-class RoadQuery:
-    t: int
-    ra: (Point, Point)  # Can be used to build a segment
-    qa: str
-
-
-def localConstraints(nqa, nra: Tuple[Point, Point],
+def localConstraints(nra: Tuple[Point, Point],
                      segments: [Tuple[Point, Point]],
                      show_reason: bool = False) -> [Point, PointState]:
     """
+
 
     Parameters
     ----------
@@ -96,7 +48,7 @@ def localConstraints(nqa, nra: Tuple[Point, Point],
         return nra, PointState.REJECTED
 
     nnra = (nra[0], nra[1])
-    radius = 20
+    radius = 30
     relevant_segments = list(filter(lambda x: nra[1].dist(x[0]) < 5*radius or
                                               nra[1].dist(x[1]) < 5*radius,
                                     segments))
@@ -161,23 +113,37 @@ def localConstraints(nqa, nra: Tuple[Point, Point],
 
 def globalGoals(rq: RoadQuery):
     prev_point, curr_point = rq.ra
-    radius = 40
+    radius = 50
     angle = math.atan2(curr_point.y - prev_point.y, curr_point.x - prev_point.x)
     # Param 0: production deletion - setting it to -1 stops the iteration here
     # Param 1: unclear
     # Param 2: three new points. It's going to be the result of going straight,
     # branching left, and branching right
 
+    house_x = 350
+    house_y = 100
+    hradius = 70
+
     # Simple algorithm: branch at 90 degrees without checking (for now) if the
     # points are fine globally
     branches = []
     curr_angle = angle - math.pi/2
     for _ in range(3):
+        nradius = radius
         delta = (int(radius*math.cos(curr_angle)), int(radius*math.sin(curr_angle)))
         tentative_point = Point(int(curr_point.x + delta[0]), int(curr_point.y + delta[1]))
-        branches.append((curr_point, tentative_point))
-        curr_angle += math.pi/2 + (random.random()/2 - 0.25)
-    return [rq.t]*3, [None]*3, branches
+        while math.dist((house_x, house_y),
+                        (int(curr_point.x + delta[0]), int(curr_point.y + delta[1]))) < hradius and nradius > 0:
+            #curr_angle += 0.1
+            #delta = (int(radius * math.cos(curr_angle)), int(radius * math.sin(curr_angle)))
+            nradius -= 1
+            delta = (int(nradius * math.cos(curr_angle)), int(nradius * math.sin(curr_angle)))
+            tentative_point = Point(int(curr_point.x + delta[0]), int(curr_point.y + delta[1]))
+
+        if nradius > 0:
+            branches.append((curr_point, tentative_point))
+        curr_angle += math.pi/2 + (random.random()/2 - 0.125)
+    return [rq.t]*len(branches), branches
 
 
 if __name__ == '__main__':
@@ -190,8 +156,9 @@ if __name__ == '__main__':
     canvas = pygame.Surface((width, height))
     menu_font = pygame.font.SysFont('Px ATI 8x16', 30)
 
-    pqueue = [RoadQuery(0, (Point(250, 250), Point(270, 270)), "qa")]  # roadq: list of road queries - replaced by prior. queue
+    pqueue = [RoadQuery(0, (Point(250, 250), Point(270, 270)))]  # roadq: list of road queries - replaced by prior. queue
     segment_list = []  # S
+    segment_weight_list = []
 
     counter = 0
     while len(pqueue) > 0:
@@ -201,39 +168,38 @@ if __name__ == '__main__':
         counter += 1
 
         # Draw the current city. Yes, this is inefficient, shut up.
-        """
         for rq in pqueue:
             s = rq.ra
             pygame.draw.line(canvas, (150, 150, 150),
                              (s[0].x, s[0].y), (s[1].x, s[1].y),
                              width=1)
-        """
-        for s in segment_list:
+        for s, sw in zip(segment_list, segment_weight_list):
             pygame.draw.line(canvas, 'white',
                              (s[0].x, s[0].y), (s[1].x, s[1].y),
-                             width=4)
+                             width=max(0, 7-sw))
             #pygame.draw.circle(canvas, color='blue', center=(nqa[1].x, nqa[1].y), radius=5)
 
         # r contains t, ra, qa
         smallest_rq = heapq.heappop(pqueue)
-        nqa, state = localConstraints(smallest_rq.qa, smallest_rq.ra, segment_list, show_reason=True)
-        if state == PointState.ACCEPTED or state==PointState.NO_BRANCH:
-            segment_list.append(nqa)
-            pygame.draw.line(canvas, 'white', (nqa[0].x, nqa[0].y), (nqa[1].x, nqa[1].y))
+        nra, state = localConstraints(smallest_rq.ra, segment_list, show_reason=True)
+        if state == PointState.ACCEPTED or state == PointState.NO_BRANCH:
+            segment_list.append(nra)
+            segment_weight_list.append(smallest_rq.t//20)
+            pygame.draw.line(canvas, 'white', (nra[0].x, nra[0].y), (nra[1].x, nra[1].y))
 
             if state == PointState.ACCEPTED:
-                pdel, nqa, nra = globalGoals(smallest_rq)
-                for i in range(3):
-                    if 7 >= pdel[i] >= 0:
-                        heapq.heappush(pqueue, RoadQuery(smallest_rq.t + 1 + pdel[i],
-                                                         nra[i],
-                                                         nqa[i]))
+                pdel, nra = globalGoals(smallest_rq)
+                for npdel, nnra in zip(pdel, nra):
+                    if 1400 >= npdel >= 0:
+                        heapq.heappush(pqueue, RoadQuery(smallest_rq.t + 1 + npdel,
+                                                         nnra))
         else:
-            pygame.draw.line(canvas, (100, 100, 100), (nqa[0].x, nqa[0].y), (nqa[1].x, nqa[1].y))
-            pygame.draw.circle(canvas, color='red', center=(nqa[1].x, nqa[1].y), radius=5)
+            pygame.draw.line(canvas, (100, 100, 100), (nra[0].x, nra[0].y), (nra[1].x, nra[1].y))
+            pygame.draw.circle(canvas, color='red', center=(nra[1].x, nra[1].y), radius=5)
 
         screen.blit(canvas, (0, 0))
         pygame.display.flip()
+        time.sleep(.001)
         move_on = True
         while not move_on:
             events = pygame.event.get()
@@ -242,5 +208,4 @@ if __name__ == '__main__':
                     move_on = True
     screen.blit(canvas, (0, 0))
     pygame.display.flip()
-    import time
     time.sleep(5)
