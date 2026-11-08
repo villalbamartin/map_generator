@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from enum import Enum
 from typing import Tuple
 import heapq
 import math
@@ -9,6 +10,12 @@ import time
 from collections import namedtuple
 
 # https://nothings.org/gamedev/l_systems.html
+
+
+class PointState(Enum):
+    ACCEPTED = 0
+    REJECTED = 1
+    NO_BRANCH = 2
 
 
 @dataclass(order=True)
@@ -40,7 +47,7 @@ def intersect(a, b, c, d):
     bool
     """
     if (a.x == c.x and a.y == c.y) or (a.x == d.x and a.y == d.y) or \
-        (b.x == c.y and b.y == c.y) or (b.x == d.x and b.y == d.y):
+        (b.x == c.x and b.y == c.y) or (b.x == d.x and b.y == d.y):
         # Shared vertex doesn't count
         return False
     return ccw(a, c, d) != ccw(b, c, d) and ccw(a, b, c) != ccw(a, b, d)
@@ -55,7 +62,7 @@ class RoadQuery:
 
 def localConstraints(nqa, nra: Tuple[Point, Point],
                      segments: [Tuple[Point, Point]],
-                     show_reason: bool = False):
+                     show_reason: bool = False) -> [Point, PointState]:
     """
 
     Parameters
@@ -66,7 +73,7 @@ def localConstraints(nqa, nra: Tuple[Point, Point],
 
     Returns
     -------
-    Point, bool
+    Point, PointState
         The (perhaps modified) input based on local constraints, and a boolean
         to indicate whether the new point is to be accepted or discarded.
 
@@ -80,16 +87,16 @@ def localConstraints(nqa, nra: Tuple[Point, Point],
     #  - Do not cross over an existing segment
     #  -
     reason = None
-    retval = True
+    retval = PointState.ACCEPTED
     if len(segments) == 0:
-        return nra, True
+        return nra, PointState.ACCEPTED
     if nra[1].x < 0 or nra[1].x > 500 or nra[1].y < 0 or nra[1].y > 500:
         if show_reason:
             print("Original point outside of boundaries")
-        return nra, False
+        return nra, PointState.REJECTED
 
     nnra = (nra[0], nra[1])
-    radius = 50
+    radius = 20
     relevant_segments = list(filter(lambda x: nra[1].dist(x[0]) < 5*radius or
                                               nra[1].dist(x[1]) < 5*radius,
                                     segments))
@@ -122,12 +129,15 @@ def localConstraints(nqa, nra: Tuple[Point, Point],
     if 0 < closest_dist < radius:
         nnra = (nnra[0], closest_point)
         reason = "Point unified due to being too close to another one"
+        # We stop the branching here because, whatever branching could happen
+        # in this corner, it has already been done
+        retval = PointState.NO_BRANCH
 
     # Filter 2: no overlaps
     for (s0, s1) in relevant_segments:
         if intersect(s0, s1, nnra[0], nnra[1]):
             # Too bad
-            retval = False
+            retval = PointState.REJECTED
             reason = f"Point deleted due to overlap: {s0},{s1} overlaps {nnra[0]},{nnra[1]}"
             break
     """
@@ -143,7 +153,7 @@ def localConstraints(nqa, nra: Tuple[Point, Point],
     """
     if not (0 <= nra[1].x <= 500 and 0 <= nra[1].y <= 500):
         reason = "Point outside boundaries"
-        retval = False
+        retval = PointState.REJECTED
     if reason is not None and show_reason:
         print(reason)
     return nra, retval
@@ -178,35 +188,45 @@ if __name__ == '__main__':
     pygame.init()
     screen = pygame.display.set_mode((width, height))
     canvas = pygame.Surface((width, height))
-    old_canvas = pygame.Surface((width, height))
+    menu_font = pygame.font.SysFont('Px ATI 8x16', 30)
 
     pqueue = [RoadQuery(0, (Point(250, 250), Point(270, 270)), "qa")]  # roadq: list of road queries - replaced by prior. queue
     segment_list = []  # S
 
     counter = 0
     while len(pqueue) > 0:
-        print(counter)
+        canvas.fill('black')
+        text_surface = menu_font.render(str(counter), False, (255, 255, 255))
+        canvas.blit(text_surface, (0, 0))
         counter += 1
-        canvas.blit(old_canvas, (0, 0))
+
+        # Draw the current city. Yes, this is inefficient, shut up.
+        for rq in pqueue:
+            s = rq.ra
+            pygame.draw.line(canvas, (150, 150, 150),
+                             (s[0].x, s[0].y), (s[1].x, s[1].y),
+                             width=1)
+        for s in segment_list:
+            pygame.draw.line(canvas, 'white',
+                             (s[0].x, s[0].y), (s[1].x, s[1].y),
+                             width=4)
+            #pygame.draw.circle(canvas, color='blue', center=(nqa[1].x, nqa[1].y), radius=5)
+
         # r contains t, ra, qa
         smallest_rq = heapq.heappop(pqueue)
         nqa, state = localConstraints(smallest_rq.qa, smallest_rq.ra, segment_list, show_reason=True)
-        if state:
+        if state == PointState.ACCEPTED or state==PointState.NO_BRANCH:
             segment_list.append(nqa)
             pygame.draw.line(canvas, 'white', (nqa[0].x, nqa[0].y), (nqa[1].x, nqa[1].y))
-            #pygame.draw.circle(canvas, color='blue', center=(nqa[1].x, nqa[1].y), radius=5)
-            # Make sure that the current change to the canvas is permanent
-            old_canvas.blit(canvas, (0, 0))
 
-            pdel, nqa, nra = globalGoals(smallest_rq)
-            for i in range(3):
-                if 7 >= pdel[i] >= 0:
-                    heapq.heappush(pqueue, RoadQuery(smallest_rq.t + 1 + pdel[i],
-                                                     nra[i],
-                                                     nqa[i]))
+            if state == PointState.ACCEPTED:
+                pdel, nqa, nra = globalGoals(smallest_rq)
+                for i in range(3):
+                    if 7 >= pdel[i] >= 0:
+                        heapq.heappush(pqueue, RoadQuery(smallest_rq.t + 1 + pdel[i],
+                                                         nra[i],
+                                                         nqa[i]))
         else:
-            # Make sure that the current change to the canvas lasts only one frame
-            old_canvas.blit(canvas, (0, 0))
             pygame.draw.line(canvas, (100, 100, 100), (nqa[0].x, nqa[0].y), (nqa[1].x, nqa[1].y))
             pygame.draw.circle(canvas, color='red', center=(nqa[1].x, nqa[1].y), radius=5)
 
