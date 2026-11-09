@@ -1,6 +1,7 @@
 from typing import Tuple
 import heapq
 import math
+import networkx as nx
 import pygame
 import random
 import time
@@ -13,6 +14,9 @@ from custom_classes import PointState, Point, RoadQuery, intersect
 
 def localConstraints(nra: Tuple[Point, Point],
                      segments: [Tuple[Point, Point]],
+                     width: int = 500,
+                     height: int = 500,
+                     radius: int = 30,
                      show_reason: bool = False) -> [Point, PointState]:
     """
 
@@ -42,15 +46,14 @@ def localConstraints(nra: Tuple[Point, Point],
     retval = PointState.ACCEPTED
     if len(segments) == 0:
         return nra, PointState.ACCEPTED
-    if nra[1].x < 0 or nra[1].x > 500 or nra[1].y < 0 or nra[1].y > 500:
+    if nra[1].x < 0 or nra[1].x > width or nra[1].y < 0 or nra[1].y > height:
         if show_reason:
             print("Original point outside of boundaries")
         return nra, PointState.REJECTED
 
     nnra = (nra[0], nra[1])
-    radius = 30
-    relevant_segments = list(filter(lambda x: nra[1].dist(x[0]) < 5*radius or
-                                              nra[1].dist(x[1]) < 5*radius,
+    relevant_segments = list(filter(lambda x: nra[1].dist(x[0]) < 2*radius or
+                                              nra[1].dist(x[1]) < 2*radius,
                                     segments))
     # Filter 1: if the new point is too close to another one then unify that
     # point with the existing one.
@@ -103,7 +106,7 @@ def localConstraints(nra: Tuple[Point, Point],
         retval = False
     else:
     """
-    if not (0 <= nra[1].x <= 500 and 0 <= nra[1].y <= 500):
+    if not (0 <= nra[1].x <= width and 0 <= nra[1].y <= height):
         reason = "Point outside boundaries"
         retval = PointState.REJECTED
     if reason is not None and show_reason:
@@ -111,18 +114,14 @@ def localConstraints(nra: Tuple[Point, Point],
     return nnra, retval
 
 
-def globalGoals(rq: RoadQuery):
+def globalGoals(rq: RoadQuery, isles: [Point], radius: int = 30, isle_radius = 60):
     prev_point, curr_point = rq.ra
-    radius = 50
+    #radius = random.randint(30, 60)
     angle = math.atan2(curr_point.y - prev_point.y, curr_point.x - prev_point.x)
     # Param 0: production deletion - setting it to -1 stops the iteration here
     # Param 1: unclear
     # Param 2: three new points. It's going to be the result of going straight,
     # branching left, and branching right
-
-    house_x = 350
-    house_y = 100
-    hradius = 70
 
     # Simple algorithm: branch at 90 degrees without checking (for now) if the
     # points are fine globally
@@ -132,70 +131,111 @@ def globalGoals(rq: RoadQuery):
         nradius = radius
         delta = (int(radius*math.cos(curr_angle)), int(radius*math.sin(curr_angle)))
         tentative_point = Point(int(curr_point.x + delta[0]), int(curr_point.y + delta[1]))
-        while math.dist((house_x, house_y),
-                        (int(curr_point.x + delta[0]), int(curr_point.y + delta[1]))) < hradius and nradius > 0:
-            #curr_angle += 0.1
-            #delta = (int(radius * math.cos(curr_angle)), int(radius * math.sin(curr_angle)))
-            nradius -= 1
-            delta = (int(nradius * math.cos(curr_angle)), int(nradius * math.sin(curr_angle)))
-            tentative_point = Point(int(curr_point.x + delta[0]), int(curr_point.y + delta[1]))
+        for house in isles:
+            while math.dist((house.x, house.y),
+                            (int(curr_point.x + delta[0]), int(curr_point.y + delta[1]))) < isle_radius and nradius > 0:
+                curr_angle += 0.1
+                delta = (int(radius * math.cos(curr_angle)), int(radius * math.sin(curr_angle)))
+                #nradius -= 1
+                #delta = (int(nradius * math.cos(curr_angle)), int(nradius * math.sin(curr_angle)))
+                tentative_point = Point(int(curr_point.x + delta[0]), int(curr_point.y + delta[1]))
 
         if nradius > 0:
             branches.append((curr_point, tentative_point))
-        curr_angle += math.pi/2 + (random.random()/2 - 0.125)
+        curr_angle += math.pi/2 + (random.random()/4 - 0.125)
     return [rq.t]*len(branches), branches
 
 
-if __name__ == '__main__':
-    width = 500
-    height = 500
-    random.seed(1)
+def visualize_system(canvas, desc_msg, pqueue, segment_list, segment_weight_list):
+    """ Plots the city in its current state.
 
+    Parameters
+    ----------
+    canvas
+        The surface where we'll draw the current state of the city
+    desc_msg : str
+        A message to display on screen
+    pqueue :
+        Priority queue with proposed roads
+    segment_list :
+        List with approved segments
+    segment_weight_list : [int]
+        List of weights for the segment list
+    """
+    # Debugging: show the canvas
+    canvas.fill('white')
+    text_surface = menu_font.render(desc_msg, False, (255, 255, 255))
+    canvas.blit(text_surface, (0, 0))
+
+    # Draw the current city. Yes, this is inefficient, shut up.
+    for requested_road in pqueue:
+        s = requested_road.ra
+        pygame.draw.line(canvas, (150, 150, 150),
+                         (s[0].x, s[0].y), (s[1].x, s[1].y),
+                         width=1)
+    try:
+        max_weight = 1+max(segment_weight_list)
+    except ValueError:
+        max_weight = 1
+    for s, s_weight in zip(segment_list, segment_weight_list):
+        pygame.draw.line(canvas, 'black',
+                         (s[0].x, s[0].y), (s[1].x, s[1].y),
+                         width=16)
+                         #width=int(8-8*(s_weight/max_weight)))
+        # pygame.draw.circle(canvas, color='blue', center=(nqa[1].x, nqa[1].y), radius=5)
+
+
+if __name__ == '__main__':
+    # Initial parameters of the simulation
+    width = 1500
+    height = 500
+    radius_for_jump = 75
+    radius_for_collision = 45
+    max_branching = 100
+    random.seed(1)
+    # We want to have a certain number of "isles" for the sections of our map.
+    isles = [Point(30, 80), Point(130, 400), Point(700, 250), Point(1000, 20), Point(1300, 400)]
+    isle_radius = 90
+
+    # Initialize PyGame
     pygame.init()
     screen = pygame.display.set_mode((width, height))
     canvas = pygame.Surface((width, height))
     menu_font = pygame.font.SysFont('Px ATI 8x16', 30)
 
-    pqueue = [RoadQuery(0, (Point(250, 250), Point(270, 270)))]  # roadq: list of road queries - replaced by prior. queue
-    segment_list = []  # S
+    # Initialize the queue with a single segment
+    pqueue = [RoadQuery(0, (Point(250, 250), Point(270, 270)))]
+    segment_list = []
     segment_weight_list = []
 
     counter = 0
     while len(pqueue) > 0:
-        canvas.fill('black')
-        text_surface = menu_font.render(str(counter), False, (255, 255, 255))
-        canvas.blit(text_surface, (0, 0))
+        if counter % 250 == 0 and False:
+            visualize_system(canvas, str(counter), pqueue, segment_list, segment_weight_list)
         counter += 1
-
-        # Draw the current city. Yes, this is inefficient, shut up.
-        for rq in pqueue:
-            s = rq.ra
-            pygame.draw.line(canvas, (150, 150, 150),
-                             (s[0].x, s[0].y), (s[1].x, s[1].y),
-                             width=1)
-        for s, sw in zip(segment_list, segment_weight_list):
-            pygame.draw.line(canvas, 'white',
-                             (s[0].x, s[0].y), (s[1].x, s[1].y),
-                             width=max(0, 7-sw))
-            #pygame.draw.circle(canvas, color='blue', center=(nqa[1].x, nqa[1].y), radius=5)
 
         # r contains t, ra, qa
         smallest_rq = heapq.heappop(pqueue)
-        nra, state = localConstraints(smallest_rq.ra, segment_list, show_reason=True)
+        nra, state = localConstraints(smallest_rq.ra, segment_list,
+                                      width=width, height=height,
+                                      radius=radius_for_collision,
+                                      show_reason=False)
         if state == PointState.ACCEPTED or state == PointState.NO_BRANCH:
             segment_list.append(nra)
-            segment_weight_list.append(smallest_rq.t//20)
-            pygame.draw.line(canvas, 'white', (nra[0].x, nra[0].y), (nra[1].x, nra[1].y))
+            segment_weight_list.append(smallest_rq.t)
+            pygame.draw.line(canvas, 'black', (nra[0].x, nra[0].y), (nra[1].x, nra[1].y))
 
             if state == PointState.ACCEPTED:
-                pdel, nra = globalGoals(smallest_rq)
+                pdel, nra = globalGoals(smallest_rq, isles,
+                                        radius=radius_for_jump,
+                                        isle_radius=isle_radius)
                 for npdel, nnra in zip(pdel, nra):
-                    if 1400 >= npdel >= 0:
+                    if max_branching >= npdel >= 0:
                         heapq.heappush(pqueue, RoadQuery(smallest_rq.t + 1 + npdel,
                                                          nnra))
         else:
             pygame.draw.line(canvas, (100, 100, 100), (nra[0].x, nra[0].y), (nra[1].x, nra[1].y))
-            pygame.draw.circle(canvas, color='red', center=(nra[1].x, nra[1].y), radius=5)
+            pygame.draw.circle(canvas, color='red', center=(nra[1].x, nra[1].y), radius=7)
 
         screen.blit(canvas, (0, 0))
         pygame.display.flip()
@@ -208,4 +248,97 @@ if __name__ == '__main__':
                     move_on = True
     screen.blit(canvas, (0, 0))
     pygame.display.flip()
+
+    print("Calculating polygons")
+    canvas.fill('white')
+    # Build the set of polygons that will make the final map
+    G = nx.Graph()
+    coord2id = dict()
+    id2coord = dict()
+    for s0, s1 in segment_list:
+        key0 = (s0.x, s0.y)
+        key1 = (s1.x, s1.y)
+        try:
+            v0 = coord2id[key0]
+        except KeyError:
+            v0 = coord2id[key0] = len(coord2id)
+            id2coord[v0] = key0
+        try:
+            v1 = coord2id[key1]
+        except KeyError:
+            v1 = coord2id[key1] = len(coord2id)
+            id2coord[v1]= key1
+        G.add_edge(v0, v1)
+    for cycle in nx.minimum_cycle_basis(G):
+        xs = []
+        ys = []
+        for v0, v1 in zip(cycle, cycle[1:] + [cycle[0]]):
+            p0 = id2coord[v0]
+            p1 = id2coord[v1]
+            xs.append(p0[0])
+            xs.append(p1[0])
+            ys.append(p0[1])
+            ys.append(p1[1])
+        center = (0.5 * min(xs) + 0.5 * max(xs), 0.5 * min(ys) + 0.5 * max(ys))
+        xs = [(i - center[0]) * (1 - 0.3) + center[0] for i in xs]
+        ys = [(i - center[1]) * (1 - 0.3) + center[1] for i in ys]
+        polygon = list(zip(xs, ys))
+        if len(polygon) > 2:
+            if random.random() < 0.9:
+                pygame.draw.lines(canvas, 'black', False, polygon)
+            else:
+                pygame.draw.polygon(canvas, 'black', polygon)
+    """
+    from collections import Counter
+    segment_used = Counter()
+    still_pending = list(segment_list)
+    open_polygons = []
+    for segment in segment_list:
+        open_polygons.append([segment[0], segment[1]])
+    ready_polygons = []
+    # Two steps.
+    # One: check whether I can add a vertex to an existing polygon
+    # Two: check whether I can merge two existing polygons
+    guard = []
+    while len(still_pending) > 0:
+        to_remove = set()
+        v0, v1 = still_pending.pop(0)
+        for idx, p in enumerate(open_polygons):
+            if v0 == p[0]:
+                p = [v1] + p
+                segment_used[(v0.x, v0.y, v1.x, v1.y)] += 1
+            elif v0 == p[1]:
+                p = p + [v1]
+                segment_used[(v0.x, v0.y, v1.x, v1.y)] += 1
+            elif v1 == p[0]:
+                p = [v0] + p
+                segment_used[(v0.x, v0.y, v1.x, v1.y)] += 1
+            elif v1 == p[1]:
+                p = p + [v0]
+                segment_used[(v0.x, v0.y, v1.x, v1.y)] += 1
+            if p[0] == p[-1]:
+                # Closed polygon
+                ready_polygons.append(p)
+                to_remove.add(idx)
+        tmp = sorted(to_remove)
+        tmp.reverse()
+        for idx in tmp:
+            _ = open_polygons.pop(idx)
+        if segment_used[(v0.x, v0.y, v1.x, v1.y)] < 2:
+            still_pending.append((v0, v1))
+        # TODO: Make this check for the last (say) 10 entries to stop the iteration
+        #if len(ready_polygons) > 550:
+        #    break
+        guard.append(len(ready_polygons))
+        if sum(guard[-5:]) == guard[-1] * 5:
+            break
+    canvas.fill('white')
+    for p in ready_polygons:
+        for p0, p1 in zip(p, p[1:]):
+            pygame.draw.line(canvas, 'black', (p0.x, p0.y), (p1.x, p1.y))
+        pygame.draw.line(canvas, 'black', (p[-1].x, p[-1].y), (p[0].x, p[0].y))
+    """
+    screen.blit(canvas, (0, 0))
+    pygame.display.flip()
+
     time.sleep(5)
