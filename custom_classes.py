@@ -1,6 +1,7 @@
 import math
 from dataclasses import dataclass
 from enum import Enum
+from typing import Tuple
 
 
 class PointState(Enum):
@@ -80,3 +81,9 @@ def intersect(a: Point, b: Point, c: Point, d:Point) -> bool:
 class RoadQuery:
     t: int
     ra: (Point, Point)  # Can be used to build a segment
+
+
+@dataclass
+class GlobalState:
+    houses: [Tuple[Point, int]]
+    river: [[Point], int]

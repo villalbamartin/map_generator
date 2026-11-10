@@ -1,15 +1,13 @@
-from typing import Tuple
+# Algorithm for streets based on this post:
+# https://nothings.org/gamedev/l_systems.html
 import heapq
 import math
 import networkx as nx
 import pygame
 import random
 import time
-
-from custom_classes import PointState, Point, RoadQuery, intersect
-
-
-# https://nothings.org/gamedev/l_systems.html
+from custom_classes import PointState, Point, RoadQuery, intersect, GlobalState
+from typing import Tuple
 
 
 def localConstraints(nra: Tuple[Point, Point],
@@ -46,7 +44,7 @@ def localConstraints(nra: Tuple[Point, Point],
     retval = PointState.ACCEPTED
     if len(segments) == 0:
         return nra, PointState.ACCEPTED
-    if nra[1].x < 0 or nra[1].x > width or nra[1].y < 0 or nra[1].y > height:
+    if nra[1].x < -50 or nra[1].x > width + 2*radius or nra[1].y < -50 or nra[1].y > height + 2*radius:
         if show_reason:
             print("Original point outside of boundaries")
         return nra, PointState.REJECTED
@@ -106,7 +104,7 @@ def localConstraints(nra: Tuple[Point, Point],
         retval = False
     else:
     """
-    if not (0 <= nra[1].x <= width and 0 <= nra[1].y <= height):
+    if not (-50 <= nra[1].x <= width and -50 <= nra[1].y <= height):
         reason = "Point outside boundaries"
         retval = PointState.REJECTED
     if reason is not None and show_reason:
@@ -114,11 +112,27 @@ def localConstraints(nra: Tuple[Point, Point],
     return nnra, retval
 
 
-def globalGoals(rq: RoadQuery, isles: [Point], radius: int = 30, isle_radius = 60,
-                river = None):
+#def globalGoals(rq: RoadQuery, isles: [Point], radius: int = 30, isle_radius = 60,
+#                river = None):
+def globalGoals(rq: RoadQuery, world: GlobalState, radius: int = 30):
+    """ Function that determines in which direction the search is supposed to
+    go.
 
+    Parameters
+    ----------
+    rq : RoadQuery
+        Starting state of the generation process.
+    world : GlobalState
+        State of the world used to controle the generation.
+    radius : int
+        Distance from existing points to use to jump when creating new points.
+
+    Returns
+    -------
+    int, [Tuple(Point, Point)]
+
+    """
     prev_point, curr_point = rq.ra
-    #radius = random.randint(30, 60)
     angle = math.atan2(curr_point.y - prev_point.y, curr_point.x - prev_point.x)
     # Param 0: production deletion - setting it to -1 stops the iteration here
     # Param 1: unclear
@@ -130,18 +144,18 @@ def globalGoals(rq: RoadQuery, isles: [Point], radius: int = 30, isle_radius = 6
     branches = []
     curr_angle = angle - math.pi/2
     for _ in range(3):
-        nradius = radius
         delta = (int(radius*math.cos(curr_angle)), int(radius*math.sin(curr_angle)))
         tentative_point = Point(int(curr_point.x + delta[0]), int(curr_point.y + delta[1]))
-        for house in isles:
-            while math.dist((house.x, house.y),
-                            (int(curr_point.x + delta[0]), int(curr_point.y + delta[1]))) < isle_radius and nradius > 0:
+        for house, house_radius in world.houses:
+            new_point = (int(curr_point.x + delta[0]), int(curr_point.y + delta[1]))
+            while (math.dist((house.x, house.y), new_point) < house_radius and
+                   radius > 0):
                 curr_angle += 0.1
                 delta = (int(radius * math.cos(curr_angle)), int(radius * math.sin(curr_angle)))
-                #nradius -= 1
-                #delta = (int(nradius * math.cos(curr_angle)), int(nradius * math.sin(curr_angle)))
                 tentative_point = Point(int(curr_point.x + delta[0]), int(curr_point.y + delta[1]))
-        if nradius > 0:
+                if curr_angle > 4 * math.pi:
+                    break
+        if curr_angle <= 4 * math.pi:
             branches.append((curr_point, tentative_point))
         curr_angle += math.pi/2 + (random.random()/4 - 0.125)
     return [rq.t]*len(branches), branches
@@ -164,6 +178,7 @@ def visualize_system(canvas, desc_msg, pqueue, segment_list, segment_weight_list
         List of weights for the segment list
     """
     # Debugging: show the canvas
+    menu_font = pygame.font.SysFont('Px ATI 8x16', 30)
     canvas.fill('white')
     text_surface = menu_font.render(desc_msg, False, (255, 255, 255))
     canvas.blit(text_surface, (0, 0))
@@ -181,7 +196,7 @@ def visualize_system(canvas, desc_msg, pqueue, segment_list, segment_weight_list
     for s, s_weight in zip(segment_list, segment_weight_list):
         pygame.draw.line(canvas, 'black',
                          (s[0].x, s[0].y), (s[1].x, s[1].y),
-                         width=16)
+                         width=3)
                          #width=int(8-8*(s_weight/max_weight)))
         # pygame.draw.circle(canvas, color='blue', center=(nqa[1].x, nqa[1].y), radius=5)
 
@@ -191,27 +206,29 @@ def main2():
     # Initial parameters of the simulation
     width = 1500
     height = 500
-    radius_for_jump = 75
-    radius_for_collision = 55
+    radius_for_jump = 50
+    radius_for_collision = 35
     max_branching = 99999999999
     random.seed(1)
-    # We want to have a certain number of "isles" for the sections of our map.
-    isles = [Point(30, 80), Point(130, 400), Point(700, 250), Point(1000, 20), Point(1300, 400)]
-    isle_radius = 90
+
+    # We want to have a certain number of "houses" for the sections of our map.
+    houses = [(Point(30, 80), 80), (Point(130, 400), 80), (Point(700, 250), 80),
+              (Point(1000, 20), 80), (Point(1300, 400), 80)]
+    world = GlobalState(houses=houses, river=None)
 
     # Initialize PyGame
     pygame.init()
     screen = pygame.display.set_mode((width, height))
     canvas = pygame.Surface((width, height))
-    menu_font = pygame.font.SysFont('Px ATI 8x16', 30)
 
     river = [Point(0, 0)]
+    """
     # Build a river
     while river[-1].x < 1000:
         new_point = Point(river[-1].x + random.randint(10, isle_radius),
-                          river[-1].y + random.randint(-int(isle_radius/5), isle_radius))
+                          river[-1].y + random.randint(-int(isle_radius/3), isle_radius))
         river.append(new_point)
-
+    """
 
     # Initialize the queue with a single segment
     pqueue = [RoadQuery(0, (Point(250, 250), Point(270, 270)))]
@@ -220,7 +237,7 @@ def main2():
 
     counter = 0
     while len(pqueue) > 0:
-        if counter % 250 == 0 and False:
+        if counter % 250 == 0:
             visualize_system(canvas, str(counter), pqueue, segment_list, segment_weight_list)
         counter += 1
 
@@ -236,10 +253,8 @@ def main2():
             pygame.draw.line(canvas, 'black', (nra[0].x, nra[0].y), (nra[1].x, nra[1].y))
 
             if state == PointState.ACCEPTED:
-                pdel, nra = globalGoals(smallest_rq, isles,
-                                        radius=radius_for_jump,
-                                        isle_radius=isle_radius,
-                                        river=None)
+                pdel, nra = globalGoals(smallest_rq, world,
+                                        radius=radius_for_jump)
                 for npdel, nnra in zip(pdel, nra):
                     if max_branching >= npdel >= 0:
                         heapq.heappush(pqueue, RoadQuery(smallest_rq.t + 1 + npdel,
@@ -256,7 +271,6 @@ def main2():
             for e in events:
                 if e.type == pygame.KEYDOWN:
                     move_on = True
-        print(len(pqueue))
     screen.blit(canvas, (0, 0))
     pygame.display.flip()
 
@@ -281,9 +295,16 @@ def main2():
             id2coord[v1]= key1
         G.add_edge(v0, v1)
     print(G)
-    for cycle in nx.minimum_cycle_basis(G):
+    start_ts = time.time()
+    cycles = nx.minimum_cycle_basis(G)
+    print(f"Elapsed time: {time.time() - start_ts:.3}")
+    start_ts = time.time()
+    for cycle in cycles:
+    #for cycle in nx.simple_cycles(G):
         xs = []
         ys = []
+        if len(cycle) < 3:
+            continue
         for v0, v1 in zip(cycle, cycle[1:] + [cycle[0]]):
             p0 = id2coord[v0]
             p1 = id2coord[v1]
@@ -296,14 +317,21 @@ def main2():
         ys = [(i - center[1]) * (1 - 0.3) + center[1] for i in ys]
         polygon = list(zip(xs, ys))
         if len(polygon) > 2:
-            if random.random() < 0.9:
+            if random.random() < 0.95:
                 pygame.draw.polygon(canvas, (238, 219, 151), polygon)
                 pygame.draw.lines(canvas, 'black', False, polygon)
             else:
                 pygame.draw.polygon(canvas, 'black', polygon)
-
+                """
+                if random.random() < 0.5:
+                    img = pygame.image.load('tree.png').convert_alpha()
+                else:
+                    img = pygame.image.load('tower.png').convert_alpha()
+                canvas.blit(img, (polygon[0][0]+30, polygon[0][1]))
+                """
+    print(f"Elapsed time for drawing only: {time.time() - start_ts:.3}")
     # Draw the river
-    pygame.draw.lines(canvas, (122, 175, 225), False, list(map(lambda p: (p.x, p.y), river)), width=50)
+    # pygame.draw.lines(canvas, (122, 175, 225), False, list(map(lambda p: (p.x, p.y), river)), width=50)
     screen.blit(canvas, (0, 0))
     pygame.display.flip()
 
