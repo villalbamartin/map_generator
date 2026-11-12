@@ -14,7 +14,7 @@ class PointState(Enum):
     NO_BRANCH = 2
 
 
-@dataclass(order=True)
+@dataclass(order=True, frozen=True)
 class Point:
     """ Class representing a 2-D point
     """
@@ -23,6 +23,28 @@ class Point:
 
     def dist(self, other):
         return math.sqrt(math.pow(other.x - self.x, 2) + math.pow(other.y - self.y, 2))
+
+
+@dataclass(order=True, frozen=True)
+class Segment:
+    p0: Point
+    p1: Point
+
+    def as_norm_tuple(self):
+        p0, p1 = self.as_norm_points()
+        return p0.x, p0.y, p1.x, p1.y
+
+    def as_tuple(self):
+        return self.p0.x, self.p0.y, self.p1.x, self.p1.y
+
+    def as_points(self):
+        return self.p0, self.p1
+
+    def as_norm_points(self):
+        if self.p0.dist(Point(0, 0)) < self.p1.dist(Point(0, 0)):
+            return self.p0, self.p1
+        else:
+            return self.p1, self.p0
 
 
 def ccw(a: Point, b: Point, c: Point) -> bool:
@@ -80,7 +102,7 @@ def intersect(a: Point, b: Point, c: Point, d:Point) -> bool:
 @dataclass(order=True)
 class RoadQuery:
     t: int
-    ra: (Point, Point)  # Can be used to build a segment
+    ra: Segment  # Can be used to build a segment
 
 
 @dataclass
