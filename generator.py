@@ -6,47 +6,51 @@ import networkx as nx
 import pygame
 import random
 import time
+from collections import Counter
 from custom_classes import PointState, Point, RoadQuery, intersect, GlobalState, Segment
-from typing import Tuple
 
 
-def localConstraints(nra: Segment,
-                     segments: [Tuple[Segment]],
-                     width: int = 500,
-                     height: int = 500,
-                     radius: int = 30,
-                     show_reason: bool = False) -> [Point, PointState]:
-    """
-
+def local_constraints(nra: Segment,
+                      segments: [Segment],
+                      width: int = 500,
+                      height: int = 500,
+                      radius: int = 30,
+                      show_reason: bool = False) -> [Point, PointState]:
+    """ Function that decides whether a point can be placed at a give place.
+    Sometimes the function will move the point somewhere else to satisfy the
+    constraints.
 
     Parameters
     ----------
     nra : Segment
         Parameter used to know where I'm coming from and in which direction I
-        should branch (if any)
-    nqa : Segment
-        Parameter used for... something?
+        should branch (if any).
+    segments : [Segment]
+        List of known segments for the world. Useful for knowing where I am not
+        allowed to place a point.
+    width : int
+        Width of the world. Used to know where the boundaries are.
+    height : int
+        Height of the world. Used to know where the boundaries are.
+    radius : int
+        Radius around the point that I'm supposed to take into account when
+        placing the new point. If the new point is closer than this to an
+        existing point, we snap the new point to the old one.
+    show_reason : bool
+        If True it will print messages showing why a certain point was placed.
 
     Returns
     -------
     Point, PointState
         The (perhaps modified) input based on local constraints, and a boolean
         to indicate whether the new point is to be accepted or discarded.
-
-    Notes
-    -----
-    Currently the second parameter is state, which is either
-    "Succeed" or "Fail". We use a boolean instead.
-
     """
-    # Restrictions to add:
-    #  - Do not cross over an existing segment
-    #  -
     reason = None
     retval = PointState.ACCEPTED
     if len(segments) == 0:
         return nra, PointState.ACCEPTED
-    if nra.p1.x < -50 or nra.p1.x > width + 2*radius or nra.p1.y < -50 or nra.p1.y > height + 2*radius:
+    if (nra.p1.x < -50 or nra.p1.x > width + 2 * radius or
+        nra.p1.y < -50 or nra.p1.y > height + 2 * radius):
         if show_reason:
             print("Original point outside of boundaries")
         return nra, PointState.REJECTED
@@ -81,6 +85,10 @@ def localConstraints(nra: Segment,
             else:
                 closest_point = segment.p1
                 closest_dist = d1
+    # Check how close I am to the nearest point and, if less than the desired
+    # radius, then both points are unified and the return value instructs the
+    # system not to continue branching from here (because there's already a
+    # point there).
     if 0 < closest_dist < radius:
         nnra = Segment(nnra.p0, closest_point)
         reason = "Point unified due to being too close to another one"
@@ -88,24 +96,14 @@ def localConstraints(nra: Segment,
         # in this corner, it has already been done
         retval = PointState.NO_BRANCH
 
-    # Filter 2: no overlaps
+    # Filter 2: no overlaps with existing segments
     for segment in relevant_segments:
         if intersect(segment.p0, segment.p1, nnra.p0, nnra.p1):
             # Too bad
             retval = PointState.REJECTED
             reason = f"Point deleted due to overlap: {segment.p0},{segment.p1} overlaps {nnra.p0},{nnra.p1}"
             break
-    """
-    # New rule: the starting point cannot be too close to an existing one,
-    # and the end point can be affixed to an existing one
-    # A starting point can overlap other points, but no more than one.
-    num_incoming_edges = sum(map(lambda x: nnra[0].dist(x[0]) < 1, segments))
-    num_incoming_edges += sum(map(lambda x: nnra[0].dist(x[1]) < 1, segments))
-
-    if num_incoming_edges > 2:
-        retval = False
-    else:
-    """
+    # We check (again) that the point is not outside the boundaries.
     if not (-50 <= nra.p1.x <= width and -50 <= nra.p1.y <= height):
         reason = "Point outside boundaries"
         retval = PointState.REJECTED
@@ -114,41 +112,42 @@ def localConstraints(nra: Segment,
     return nnra, retval
 
 
-#def globalGoals(rq: RoadQuery, isles: [Point], radius: int = 30, isle_radius = 60,
-#                river = None):
-def globalGoals(rq: RoadQuery, world: GlobalState, radius: int = 30):
-    """ Function that determines in which direction the search is supposed to
-    go.
+def global_goals(rq: RoadQuery, world: GlobalState, radius: int = 30):
+    """ Function that determines in which direction the expansion is supposed to
+    continue.
 
     Parameters
     ----------
     rq : RoadQuery
         Starting state of the generation process.
     world : GlobalState
-        State of the world used to controle the generation.
+        State of the world used to control the generation.
     radius : int
         Distance from existing points to use to jump when creating new points.
 
     Returns
     -------
-    int, [Tuple(Point, Point)]
-
+    [int], [Segment]
+        A t parameter used to penalize the generation (the higher the number,
+        the fewer branches there will be) and a list of newly-suggested segments
+        to evaluate for the next iteration.
     """
     prev_point = rq.ra.p0
     curr_point = rq.ra.p1
     angle = math.atan2(curr_point.y - prev_point.y, curr_point.x - prev_point.x)
-    # Param 0: production deletion - setting it to -1 stops the iteration here
-    # Param 1: unclear
-    # Param 2: three new points. It's going to be the result of going straight,
-    # branching left, and branching right
 
     # Simple algorithm: branch at 90 degrees without checking (for now) if the
-    # points are fine globally
+    # points are fine globally. We achieve this branching by adding 90° to the
+    # angle at every iteration.
+    # We have 3 iterations because, at 90° each, a fourth iteration would
+    # overlap with the starting one.
     branches = []
     curr_angle = angle - math.pi/2
     for _ in range(3):
         delta = (int(radius*math.cos(curr_angle)), int(radius*math.sin(curr_angle)))
         tentative_point = Point(int(curr_point.x + delta[0]), int(curr_point.y + delta[1]))
+        # We don't want to get too close to the houses - if that happens we
+        # fiddle with the point until it's far enough.
         for house, house_radius in world.houses:
             new_point = (int(curr_point.x + delta[0]), int(curr_point.y + delta[1]))
             while (math.dist((house.x, house.y), new_point) < house_radius and
@@ -157,7 +156,12 @@ def globalGoals(rq: RoadQuery, world: GlobalState, radius: int = 30):
                 delta = (int(radius * math.cos(curr_angle)), int(radius * math.sin(curr_angle)))
                 tentative_point = Point(int(curr_point.x + delta[0]), int(curr_point.y + delta[1]))
                 if curr_angle > 4 * math.pi:
+                    # If I performed a full turn then there's no angle that will
+                    # work and we give up on this point.
                     break
+        # In combination with the above check, this part ensures that we add a
+        # new point but only if we could place it around all the existing
+        # houses.
         if curr_angle <= 4 * math.pi:
             branches.append(Segment(curr_point, tentative_point))
         curr_angle += math.pi/2 + (random.random()/4 - 0.125)
@@ -204,6 +208,160 @@ def visualize_system(canvas, desc_msg, pqueue, segment_list, segment_weight_list
         # pygame.draw.circle(canvas, color='blue', center=(nqa[1].x, nqa[1].y), radius=5)
 
 
+def get_perimeter(polygon_list: [[Segment]]) -> [Segment]:
+    """ Obtains the list of segments that correspond to those in the periphery
+    of this graph. The graph is assumed to be connected and representing a
+    single polygon - if you have more than one component, I don't know what to
+    tell you.
+
+    Parameters
+    ----------
+    polygon_list : [[Segment]]
+        List of known polygons that, when put together, form a mostly-connected
+        graph.
+
+    Returns
+    -------
+    [Segments]
+        List of segments that represent the outer perimeter of this graph.
+    """
+    edge2count = Counter
+    retval = []
+    for polygon in polygon_list:
+        for segment in polygon:
+            edge2count[segment.as_norm_tuple()] += 1
+    for segment, segment_count in edge2count.items():
+        if segment_count == 1:
+            retval.append(segment)
+    return retval
+
+
+def edges_to_blocks(segment_list: [Segment], x0: int, y0: int, x1: int, y1: int,
+                    coord2id: dict[Point, int], id2coord: dict[int, Point],
+                    max_segments: int = 100, split_horizontal=True):
+    """ Takes a series of blocks and returns the polygons that correspond to
+    those segments.
+
+    Parameters
+    ----------
+    segment_list : [Segment]
+        Segments to turn into polygons
+    x0 : int
+        X-coordinate of the left margin of the area to analyze.
+    y0 : int
+        Y-coordinate of the bottom margin of the area to analyze.
+    x1 : int
+        X-coordinate of the right margin of the area to analyze.
+    y1 : int
+        Y-coordinate of the top margin of the area to analyze.s
+    coord2id :
+        Dictionary that turns 2d coordinates into a unique integer ID. It is the
+        reciprocal function of id2coord.
+    id2coord:
+        Dictionary that turns an integer ID into 2d coordinates. It is the
+        reciprocal function of coord2id.
+    split_horizontal : True
+        If True the recursive step will split the space horizontally, and
+        otherwise it will do so vertically. This is done to prevent the space
+        from being split into thin slices - the alternative would be to perform
+        the recursive step in 4 segments, but this way makes the code cleaner.
+
+    Returns
+    -------
+    [[Point]]
+        List of segments, where every segment is a list of 2D points that
+        connect to each other.
+    """
+    polygons = []
+
+    if len(segment_list) < max_segments:
+        # The number of segments is small enough that we can calculate it as
+        # it is.
+        g = nx.Graph()
+        for segment in segment_list:
+            v0 = coord2id[segment.p0]
+            v1 = coord2id[segment.p1]
+            g.add_edge(v0, v1)
+        # We obtain the list of polygons in this list.
+        cycles = nx.minimum_cycle_basis(g)
+        for cycle in cycles:
+            polygon = []
+            if len(cycle) < 3:
+                continue
+            for v0, v1 in zip(cycle, cycle[1:] + [cycle[0]]):
+                p0 = id2coord[v0]
+                p1 = id2coord[v1]
+                polygon.append(p0)
+                polygon.append(p1)
+            polygons.append(polygon)
+    else:
+        # We need to apply divide and conquer. For geometric reasons we split
+        # the area in 4 pieces - splitting it in 2 leads to thin stripes of
+        # the area, but I'd rather have squares
+        middle_x = int(x0/2 + x1/2)
+        middle_y = int(y0/2 + y1/2)
+        # The algorithm will split the space into two halves plus some leftover
+        # edges in the middle. These variables will hold the segments required
+        # for every subdivision.
+        first_segments = []
+        second_segments = []
+        middle_segments = []
+        if split_horizontal:
+            for s in segment_list:
+                if max(s.p0.x, s.p1.x) < middle_x:
+                    first_segments.append(s)
+                elif middle_x < min(s.p0.x, s.p1.x):
+                    second_segments.append(s)
+                else:
+                    middle_segments.append(s)
+            first_polygon_set = edges_to_blocks(first_segments,
+                                                x0, y0, middle_x, y1,
+                                                coord2id, id2coord,
+                                                max_segments, not split_horizontal)
+            second_polygon_set = edges_to_blocks(first_segments,
+                                                 middle_x, y0, x1, y1,
+                                                 coord2id, id2coord,
+                                                 max_segments, not split_horizontal)
+        else:
+            for s in segment_list:
+                if max(s.p0.y, s.p1.y) < middle_y:
+                    first_segments.append(s)
+                elif middle_y < min(s.p0.y, s.p1.y):
+                    second_segments.append(s)
+                else:
+                    middle_segments.append(s)
+            first_polygon_set = edges_to_blocks(first_segments,
+                                                x0, y0, x1, middle_y,
+                                                coord2id, id2coord,
+                                                max_segments, not split_horizontal)
+            second_polygon_set = edges_to_blocks(first_segments,
+                                                 x0, middle_y, x1, y1,
+                                                 coord2id, id2coord,
+                                                 max_segments, not split_horizontal)
+        # Now the last part: add the middle polygons into the calculation.
+        first_perimeter = get_perimeter(first_polygon_set)
+        second_perimeter = get_perimeter(second_polygon_set)
+        g = nx.Graph()
+        for segment in first_perimeter + second_perimeter + middle_segments:
+            p0, p1 = segment.as_points()
+            g.add_edge(coord2id[p0], coord2id[p1])
+        # Calculate the new polygons. Note that the two perimeters are also
+        # included in this graph and make a giant polygon - we remove those with
+        # a heuristic.
+        cycles = nx.minimum_cycle_basis(g)
+        polygons = first_polygon_set + second_polygon_set
+        for cycle in cycles:
+            polygon = []
+            if len(cycle) < 3 or len(cycle) > 6:
+                continue
+            for v0, v1 in zip(cycle, cycle[1:] + [cycle[0]]):
+                p0 = id2coord[v0]
+                p1 = id2coord[v1]
+                polygon.append(p0)
+                polygon.append(p1)
+            polygons.append(polygon)
+    return polygons
+
 #if __name__ == '__main__':
 def main2():
     # Initial parameters of the simulation
@@ -211,10 +369,25 @@ def main2():
     height = 600
     radius_for_jump = 50
     radius_for_collision = 35
+    # If we don't set this parameter to anything deccent, the iteration will
+    # stop when all the points have reached the boundaries of the world.
+    # This is the winning strategy right now, but I keep the parameter in case
+    # I need to stop earlier for some reason.
     max_branching = 99999999999
     random.seed(1)
 
     # We want to have a certain number of "houses" for the sections of our map.
+    # We also want a river, but that part of the code is currently taken out
+    # until I get a better algorithm for generating it.
+    river = [Point(0, 0)]
+    """
+    # Build a river
+    while river[-1].x < 1000:
+        new_point = Point(river[-1].x + random.randint(10, isle_radius),
+                          river[-1].y + random.randint(-int(isle_radius/3), isle_radius))
+        river.append(new_point)
+    """
+
     houses = [(Point(30, 80), 80), (Point(130, 400), 80), (Point(700, 250), 80),
               (Point(1000, 20), 80), (Point(1300, 400), 80)]
     world = GlobalState(houses=houses, river=None)
@@ -224,15 +397,7 @@ def main2():
     screen = pygame.display.set_mode((width, height))
     canvas = pygame.Surface((width, height))
 
-    river = [Point(0, 0)]
-    """
-    # Build a river
-    while river[-1].x < 1000:
-        new_point = Point(river[-1].x + random.randint(10, isle_radius),
-                          river[-1].y + random.randint(-int(isle_radius/3), isle_radius))
-        river.append(new_point)
-    """
-    # Initialize the queue with a single segment
+    # Initialize the priority queue with a single segment.
     pqueue = [RoadQuery(0, Segment(Point(250, 250), Point(270, 270)))]
     segment_list = []
     segment_weight_list = []
@@ -242,29 +407,40 @@ def main2():
         if counter % 250 == 0:
             visualize_system(canvas, str(counter), pqueue, segment_list, segment_weight_list)
         counter += 1
-        # r contains t, ra, qa
+        # Extract the next segment I should pay attention to, and see if the
+        # local constraints allow for it.
         smallest_rq = heapq.heappop(pqueue)
-        nra, state = localConstraints(smallest_rq.ra, segment_list,
-                                      width=width, height=height,
-                                      radius=radius_for_collision,
-                                      show_reason=False)
+        nra, state = local_constraints(smallest_rq.ra, segment_list,
+                                       width=width, height=height,
+                                       radius=radius_for_collision,
+                                       show_reason=False)
+        # If the segment was accepted we add it to the list of accepted vertices
+        # and (maybe) continue the iteration
         if state == PointState.ACCEPTED or state == PointState.NO_BRANCH:
             segment_list.append(nra)
             segment_weight_list.append(smallest_rq.t)
             pygame.draw.line(canvas, 'black', (nra.p0.x, nra.p0.y), (nra.p1.x, nra.p1.y))
 
+            # We continue the iteration if the local conditions allowed for it.
             if state == PointState.ACCEPTED:
-                pdel, nra = globalGoals(smallest_rq, world,
-                                        radius=radius_for_jump)
+                # Obtain the list of new points based on the global constraints.
+                pdel, nra = global_goals(smallest_rq, world,
+                                         radius=radius_for_jump)
+                # Check that we haven't reached the maximum number of iterations
+                # with this segment.
                 for npdel, nnra in zip(pdel, nra):
                     if max_branching >= npdel >= 0:
                         heapq.heappush(pqueue, RoadQuery(smallest_rq.t + 1 + npdel,
                                                          nnra))
         else:
+            # Segment not accepted. We show some information that hopefully
+            # will show why it wasn't accepted.
             pygame.draw.line(canvas, (100, 100, 100), (nra.p0.x, nra.p0.y), (nra.p1.x, nra.p1.y))
             pygame.draw.circle(canvas, color='red', center=(nra.p1.x, nra.p1.y), radius=7)
         screen.blit(canvas, (0, 0))
         pygame.display.flip()
+        # Setting move_on = False ensures that the code will only iterate one
+        # frame at the time based on keypresses.
         move_on = True
         while not move_on:
             events = pygame.event.get()
@@ -274,12 +450,15 @@ def main2():
     screen.blit(canvas, (0, 0))
     pygame.display.flip()
 
+    # Part II: Calculate the individual polygons that make up the blocks.
     print("Calculating polygons")
     canvas.fill('white')
-    from collections import Counter
+    # This counter keeps a record of how many times a given edge has been used
+    # for a polygon. Edges on the outside of the graph are used only once.
+    # This is important for efficiency reasons - I haven't written an
+    # explanation yet for why, but I will.
     edge2count = Counter()
-
-    # Build the set of polygons that will make the final map
+    # Graph that will be used for obtaining the individual blocks.
     G = nx.Graph()
     coord2id = dict()
     id2coord = dict()
