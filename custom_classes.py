@@ -24,6 +24,9 @@ class Point:
     def dist(self, other):
         return math.sqrt(math.pow(other.x - self.x, 2) + math.pow(other.y - self.y, 2))
 
+    def as_tuple(self):
+        return (self.x, self.y)
+
 
 @dataclass(order=True, frozen=True)
 class Segment:

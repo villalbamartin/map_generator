@@ -208,7 +208,7 @@ def visualize_system(canvas, desc_msg, pqueue, segment_list, segment_weight_list
         # pygame.draw.circle(canvas, color='blue', center=(nqa[1].x, nqa[1].y), radius=5)
 
 
-def get_perimeter(polygon_list: [[Segment]]) -> [Segment]:
+def get_perimeter(polygon_list: [[Point]]) -> [Point]:
     """ Obtains the list of segments that correspond to those in the periphery
     of this graph. The graph is assumed to be connected and representing a
     single polygon - if you have more than one component, I don't know what to
@@ -216,31 +216,39 @@ def get_perimeter(polygon_list: [[Segment]]) -> [Segment]:
 
     Parameters
     ----------
-    polygon_list : [[Segment]]
-        List of known polygons that, when put together, form a mostly-connected
+    polygon_list : [[Point]]
+        List of known points that, when put together, form a mostly-connected
         graph.
 
     Returns
     -------
-    [Segments]
+    [[Segments]]
         List of segments that represent the outer perimeter of this graph.
     """
-    edge2count = Counter
+
+    ## This should return a single list of segments. Yes, really!
+    edge2count = Counter()
     retval = []
     for polygon in polygon_list:
-        for segment in polygon:
-            edge2count[segment.as_norm_tuple()] += 1
-    for segment, segment_count in edge2count.items():
-        if segment_count == 1:
-            retval.append(segment)
+        for p0, p1 in zip(polygon, polygon[1:] + [polygon[0]]):
+            #edge2count[(p0.x, p0.y, p1.x, p1.y)] += 1
+            edge2count[Segment(p0, p1).as_norm_tuple()] += 1
+    for polygon in polygon_list:
+        for p0, p1 in zip(polygon, polygon[1:] + [polygon[0]]):
+            #if edge2count[(p0.x, p0.y, p1.x, p1.y)] == 1:
+            # This is "<=1" instead of "==1" to deal with lost edges.
+            # It doesn't work.
+            if edge2count[Segment(p0, p1).as_norm_tuple()] <= 1:
+                retval.append(Segment(p0, p1))
     return retval
 
 
 def edges_to_blocks(segment_list: [Segment], x0: int, y0: int, x1: int, y1: int,
                     coord2id: dict[Point, int], id2coord: dict[int, Point],
-                    max_segments: int = 100, split_horizontal=True):
+                    max_segments: int=100, split_horizontal=False,
+                    screen=None, canvas=None) -> [[Point]]:
     """ Takes a series of blocks and returns the polygons that correspond to
-    those segments.
+    those segments plus the edges that do not belong to any polygon.
 
     Parameters
     ----------
@@ -268,11 +276,14 @@ def edges_to_blocks(segment_list: [Segment], x0: int, y0: int, x1: int, y1: int,
 
     Returns
     -------
-    [[Point]]
-        List of segments, where every segment is a list of 2D points that
-        connect to each other.
+    [[Point]], [Segment]
+        List of polygons, where every polygon is a list of 2D points that
+        connect to each other, plus a list of segments that do not correspond
+        to any existing polygon.
     """
+    #print(segment_list)
     polygons = []
+    incomplete = set(map(lambda p: p.as_norm_tuple(), segment_list))
 
     if len(segment_list) < max_segments:
         # The number of segments is small enough that we can calculate it as
@@ -286,13 +297,14 @@ def edges_to_blocks(segment_list: [Segment], x0: int, y0: int, x1: int, y1: int,
         cycles = nx.minimum_cycle_basis(g)
         for cycle in cycles:
             polygon = []
-            if len(cycle) < 3:
-                continue
+            assert len(cycle) >= 3, f"Cycles of size {len(cycle)} should be impossible"
             for v0, v1 in zip(cycle, cycle[1:] + [cycle[0]]):
                 p0 = id2coord[v0]
                 p1 = id2coord[v1]
                 polygon.append(p0)
                 polygon.append(p1)
+                incomplete.discard((p0.x, p0.y, p1.x, p1.y))
+                incomplete.discard((p1.x, p1.y, p0.x, p0.y))
             polygons.append(polygon)
     else:
         # We need to apply divide and conquer. For geometric reasons we split
@@ -307,6 +319,10 @@ def edges_to_blocks(segment_list: [Segment], x0: int, y0: int, x1: int, y1: int,
         second_segments = []
         middle_segments = []
         if split_horizontal:
+            pygame.draw.line(canvas, 'green', (middle_x, y0), (middle_x, y1))
+            screen.blit(canvas, (0, 0))
+            pygame.display.flip()
+
             for s in segment_list:
                 if max(s.p0.x, s.p1.x) < middle_x:
                     first_segments.append(s)
@@ -314,15 +330,25 @@ def edges_to_blocks(segment_list: [Segment], x0: int, y0: int, x1: int, y1: int,
                     second_segments.append(s)
                 else:
                     middle_segments.append(s)
-            first_polygon_set = edges_to_blocks(first_segments,
-                                                x0, y0, middle_x, y1,
-                                                coord2id, id2coord,
-                                                max_segments, not split_horizontal)
-            second_polygon_set = edges_to_blocks(first_segments,
-                                                 middle_x, y0, x1, y1,
-                                                 coord2id, id2coord,
-                                                 max_segments, not split_horizontal)
+            first_polygon_set, first_extra = edges_to_blocks(first_segments,
+                                                             x0, y0,
+                                                             middle_x, y1,
+                                                             coord2id, id2coord,
+                                                             max_segments,
+                                                             not split_horizontal,
+                                                             screen, canvas)
+            second_polygon_set, second_extra = edges_to_blocks(second_segments,
+                                                               middle_x, y0,
+                                                               x1, y1,
+                                                               coord2id, id2coord,
+                                                               max_segments,
+                                                               not split_horizontal,
+                                                               screen, canvas)
         else:
+            pygame.draw.line(canvas, 'green', (x0, middle_y), (x1, middle_y))
+            screen.blit(canvas, (0, 0))
+            pygame.display.flip()
+
             for s in segment_list:
                 if max(s.p0.y, s.p1.y) < middle_y:
                     first_segments.append(s)
@@ -330,21 +356,43 @@ def edges_to_blocks(segment_list: [Segment], x0: int, y0: int, x1: int, y1: int,
                     second_segments.append(s)
                 else:
                     middle_segments.append(s)
-            first_polygon_set = edges_to_blocks(first_segments,
-                                                x0, y0, x1, middle_y,
-                                                coord2id, id2coord,
-                                                max_segments, not split_horizontal)
-            second_polygon_set = edges_to_blocks(first_segments,
-                                                 x0, middle_y, x1, y1,
-                                                 coord2id, id2coord,
-                                                 max_segments, not split_horizontal)
+            first_polygon_set, first_extra = edges_to_blocks(first_segments,
+                                                             x0, y0,
+                                                             x1, middle_y,
+                                                             coord2id, id2coord,
+                                                             max_segments,
+                                                             not split_horizontal,
+                                                             screen, canvas)
+            second_polygon_set, second_extra = edges_to_blocks(second_segments,
+                                                               x0, middle_y,
+                                                               x1, y1,
+                                                               coord2id, id2coord,
+                                                               max_segments,
+                                                               not split_horizontal,
+                                                               screen, canvas)
+        assert (len(first_segments) + len(second_segments) +
+                len(middle_segments) == len(segment_list)),\
+               "Lost polygons in partitioning"
         # Now the last part: add the middle polygons into the calculation.
         first_perimeter = get_perimeter(first_polygon_set)
         second_perimeter = get_perimeter(second_polygon_set)
+        # Debug printing
+        for s in first_perimeter + second_perimeter:
+            p0 = s.p0.as_tuple()
+            p1 = s.p1.as_tuple()
+            pygame.draw.line(canvas, 'black', p0, p1, width=2)
+        for s in middle_segments:
+            p0 = s.p0.as_tuple()
+            p1 = s.p1.as_tuple()
+            pygame.draw.line(canvas, (200, 200, 200), p0, p1, width=2)
+        screen.blit(canvas, (0, 0))
+        pygame.display.flip()
+
         g = nx.Graph()
-        for segment in first_perimeter + second_perimeter + middle_segments:
+        for segment in first_perimeter + second_perimeter + middle_segments + first_extra + second_extra:
             p0, p1 = segment.as_points()
             g.add_edge(coord2id[p0], coord2id[p1])
+
         # Calculate the new polygons. Note that the two perimeters are also
         # included in this graph and make a giant polygon - we remove those with
         # a heuristic.
@@ -352,15 +400,26 @@ def edges_to_blocks(segment_list: [Segment], x0: int, y0: int, x1: int, y1: int,
         polygons = first_polygon_set + second_polygon_set
         for cycle in cycles:
             polygon = []
-            if len(cycle) < 3 or len(cycle) > 6:
+            if len(cycle) < 2 or len(cycle) > 6:
                 continue
             for v0, v1 in zip(cycle, cycle[1:] + [cycle[0]]):
                 p0 = id2coord[v0]
                 p1 = id2coord[v1]
                 polygon.append(p0)
                 polygon.append(p1)
+                incomplete.discard((p0.x, p0.y, p1.x, p1.y))
+                incomplete.discard((p1.x, p1.y, p0.x, p0.y))
             polygons.append(polygon)
-    return polygons
+    print(f'({x0},{y0})-({x1},{y1}): {len(polygons)}')
+    a = 2
+    for pol in polygons:
+        as_list = list(map(lambda p: (p.x, p.y), pol))
+        pygame.draw.lines(canvas, 'red', False, as_list)
+        screen.blit(canvas, (0, 0))
+        pygame.display.flip()
+        #time.sleep(.01)
+    return polygons, list(map(lambda p: Segment(Point(p[0], p[1]), Point(p[2], p[3])), incomplete))
+
 
 #if __name__ == '__main__':
 def main2():
@@ -453,6 +512,8 @@ def main2():
     # Part II: Calculate the individual polygons that make up the blocks.
     print("Calculating polygons")
     canvas.fill('white')
+
+    """
     # This counter keeps a record of how many times a given edge has been used
     # for a polygon. Edges on the outside of the graph are used only once.
     # This is important for efficiency reasons - I haven't written an
@@ -533,21 +594,53 @@ def main2():
             else:
                 pygame.draw.polygon(canvas, (181, 238, 151), polygon)
             pygame.draw.lines(canvas, 'black', False, polygon)
-            """
+
                 if random.random() < 0.5:
                     img = pygame.image.load('tree.png').convert_alpha()
                 else:
                     img = pygame.image.load('tower.png').convert_alpha()
                 canvas.blit(img, (polygon[0][0]+30, polygon[0][1]))
-            """
     for outer_edge, outer_edge_count in edge2count.items():
         if outer_edge_count == 1:
             pygame.draw.line(canvas, 'red', (outer_edge[0], outer_edge[1]), (outer_edge[2], outer_edge[3]))
     print(f"Elapsed time for drawing only: {time.time() - start_ts:.3}")
+    """
+
+    coord2id = dict()
+    id2coord = dict()
+    for segment in segment_list:
+        key0 = Point(segment.p0.x, segment.p0.y)
+        key1 = Point(segment.p1.x, segment.p1.y)
+        try:
+            _ = coord2id[key0]
+        except KeyError:
+            v0 = coord2id[key0] = len(coord2id)
+            id2coord[v0] = key0
+        try:
+            _ = coord2id[key1]
+        except KeyError:
+            v1 = coord2id[key1] = len(coord2id)
+            id2coord[v1] = key1
+    city_blocks, extra_edges = edges_to_blocks(segment_list, 0, 0, width, height,
+                                               coord2id, id2coord,
+                                               max_segments=50, screen=screen, canvas=canvas)
+    if len(extra_edges) > 0:
+        print(f"Missing {len(extra_edges)} edges from graph")
+    canvas.fill('white')
+    for block in city_blocks:
+        print(len(block))
+        xs = list(map(lambda p: p.x, block))
+        ys = list(map(lambda p: p.y, block))
+        center = (0.5 * min(xs) + 0.5 * max(xs), 0.5 * min(ys) + 0.5 * max(ys))
+        xs = [(i - center[0]) * (1 - 0.3) + center[0] for i in xs]
+        ys = [(i - center[1]) * (1 - 0.3) + center[1] for i in ys]
+        polygon = list(zip(xs, ys))
+        pygame.draw.lines(canvas, (122, 175, 225), False, polygon, width=1)
     # Draw the river
     # pygame.draw.lines(canvas, (122, 175, 225), False, list(map(lambda p: (p.x, p.y), river)), width=50)
     screen.blit(canvas, (0, 0))
     pygame.display.flip()
+
 
 if __name__ == '__main__':
     import cProfile
