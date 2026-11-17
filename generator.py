@@ -492,7 +492,6 @@ def polygons_from_edges(edges: list[Segment], screen=None, canvas=None) -> list[
                         edge_count[Segment(p0, p1).as_norm()] += 1
                         pygame.draw.line(canvas, 'red', (p0.x, p0.y), (p1.x, p1.y))
                     queue = []
-                    # TODO: increase the edge counter by 1
                     break
                 elif edge.p0 == n.p0:
                     # Made a loop!
@@ -505,7 +504,6 @@ def polygons_from_edges(edges: list[Segment], screen=None, canvas=None) -> list[
                         edge_count[Segment(p0, p1).as_norm()] += 1
                         pygame.draw.line(canvas, 'blue', (p0.x, p0.y), (p1.x, p1.y))
                     queue = []
-                    # TODO: increase the edge counter by 1
                     break
                 else:
                     # Keep collecting neighbors
@@ -525,7 +523,7 @@ def polygons_from_edges(edges: list[Segment], screen=None, canvas=None) -> list[
 #if __name__ == '__main__':
 def main2():
     # Initial parameters of the simulation
-    width = 1600
+    width = 600
     height = 600
     radius_for_jump = 50
     radius_for_collision = 35
