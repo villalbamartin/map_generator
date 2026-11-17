@@ -6,7 +6,7 @@ import networkx as nx
 import pygame
 import random
 import time
-from collections import Counter
+from collections import Counter, defaultdict
 from custom_classes import PointState, Point, RoadQuery, intersect, GlobalState, Segment
 
 
@@ -421,10 +421,111 @@ def edges_to_blocks(segment_list: [Segment], x0: int, y0: int, x1: int, y1: int,
     return polygons, list(map(lambda p: Segment(Point(p[0], p[1]), Point(p[2], p[3])), incomplete))
 
 
+def polygons_from_edges(edges: list[Segment], screen=None, canvas=None) -> list[list[Point]]:
+    # Given a vertex, returns the edges that include that vertex.
+    point2edge = defaultdict(set)
+    # Counts the number of times a given edge has been used in a polygon
+    edge_count = Counter()
+    # Verified polygons
+    polygons = []
+    # We calculate the edges iteratively - edge (k-1) was added to the list at
+    # a time in which edge k was unknown and so no information about those
+    # edges is needed.
+    canvas.fill('white')
+    screen.blit(canvas, (0, 0))
+    pygame.display.flip()
+
+    for idx, edge in enumerate(edges):
+        screen.blit(canvas, (0, 0))
+        pygame.display.flip()
+        #time.sleep(0.1)
+        print(idx)
+        move_on = True
+        while not move_on:
+            events = pygame.event.get()
+            for e in events:
+                if e.type == pygame.KEYDOWN:
+                    move_on = True
+
+        print(f'Following {edge}')
+        point2edge[edge.p0].add(edge.as_norm())
+        point2edge[edge.p1].add(edge.as_norm())
+        # We begin BFS over the known neighbors until we either find edge.p0
+        # (which means a loop) or we run out of neighbors.
+
+        #pygame.draw.line(canvas, (200, 200, 200), (edge.p0.x, edge.p0.y), (edge.p1.x, edge.p1.y))
+        # The queue contains lists of vertices representing partially-built
+        # polygons that we extend one vertex at a time
+        queue = [[edge.p1]]
+        visited = {edge}
+        while len(queue) > 0:
+            next_partial_polygon = queue.pop(0)
+            if len(next_partial_polygon) > 6:
+                continue
+            elif len(next_partial_polygon) == 1:
+                curr_edge = Segment(edge.p0, edge.p1)
+            else:
+                curr_edge = Segment(next_partial_polygon[-2], next_partial_polygon[-1])
+            print(f"   Evaluating partial polygon {next_partial_polygon}")
+            neighbors = point2edge[next_partial_polygon[-1]]
+
+            # Remember: these are edges
+            for n in neighbors:
+                print(f"      Next neighbor: {n}")
+                if (n.p0 == curr_edge.p0 and n.p1 == curr_edge.p1) or (n.p0 == curr_edge.p1 and n.p1 == curr_edge.p0):
+                    # I iterated over myself - ignore and move on
+                    continue
+                    print(f"      Iterating over same edge - ignored")
+                elif edge_count[n.as_norm()] > 1 or n.as_norm() in visited:
+                    # I've visited this edge two times, which is the maximum
+                    # we allow for a planar graph
+                    print(f"      Edge visited two or more times")
+                    continue
+                elif edge.p0 == n.p1:
+                    # Made a loop!
+                    print(f"      Loop!: {next_partial_polygon} + {n.p1}")
+                    polygon = next_partial_polygon + [n.p1]
+                    polygon.append(polygon[0])
+                    polygons.append(polygon)
+
+                    for p0, p1 in zip(polygon, polygon[1:] + [polygon[0]]):
+                        edge_count[Segment(p0, p1).as_norm()] += 1
+                        pygame.draw.line(canvas, 'red', (p0.x, p0.y), (p1.x, p1.y))
+                    queue = []
+                    # TODO: increase the edge counter by 1
+                    break
+                elif edge.p0 == n.p0:
+                    # Made a loop!
+                    print(f"      Loop!: {next_partial_polygon} + {n.p0}")
+                    polygon = next_partial_polygon + [n.p0]
+                    polygon.append(polygon[0])
+                    polygons.append(polygon)
+
+                    for p0, p1 in zip(polygon, polygon[1:] + [polygon[0]]):
+                        edge_count[Segment(p0, p1).as_norm()] += 1
+                        pygame.draw.line(canvas, 'blue', (p0.x, p0.y), (p1.x, p1.y))
+                    queue = []
+                    # TODO: increase the edge counter by 1
+                    break
+                else:
+                    # Keep collecting neighbors
+                    if n.p0 == next_partial_polygon[-1]:
+                        if n.p1 not in next_partial_polygon:
+                            print(f"      Adding {n.p1} to the queue")
+                            queue.append(next_partial_polygon + [n.p1])
+                    else:
+                        if n.p0 not in next_partial_polygon:
+                            print(f"      Adding {n.p0} to the queue")
+                            queue.append(next_partial_polygon + [n.p0])
+    print(edge_count)
+    return polygons
+
+
+
 #if __name__ == '__main__':
 def main2():
     # Initial parameters of the simulation
-    width = 600
+    width = 1600
     height = 600
     radius_for_jump = 50
     radius_for_collision = 35
@@ -476,7 +577,12 @@ def main2():
         # If the segment was accepted we add it to the list of accepted vertices
         # and (maybe) continue the iteration
         if state == PointState.ACCEPTED or state == PointState.NO_BRANCH:
-            segment_list.append(nra)
+            # We want to keep the polygon in the direction in which it was found,
+            # but we also need to check that it isn't already present in the
+            # segment list in the other direction. Therefore this check.
+            # TODO: is this check too slow?
+            if nra not in segment_list and Segment(nra.p1, nra.p0) not in segment_list:
+                segment_list.append(nra)
             segment_weight_list.append(smallest_rq.t)
             pygame.draw.line(canvas, 'black', (nra.p0.x, nra.p0.y), (nra.p1.x, nra.p1.y))
 
@@ -509,102 +615,39 @@ def main2():
     screen.blit(canvas, (0, 0))
     pygame.display.flip()
 
+    city_blocks = polygons_from_edges(segment_list, canvas=canvas, screen=screen)
+    canvas.fill('white')
+
+    """
     # Part II: Calculate the individual polygons that make up the blocks.
     print("Calculating polygons")
     canvas.fill('white')
 
-    """
-    # This counter keeps a record of how many times a given edge has been used
-    # for a polygon. Edges on the outside of the graph are used only once.
-    # This is important for efficiency reasons - I haven't written an
-    # explanation yet for why, but I will.
-    edge2count = Counter()
-    # Graph that will be used for obtaining the individual blocks.
-    G = nx.Graph()
-    coord2id = dict()
-    id2coord = dict()
+    from collections import defaultdict
+    segment_counter = Counter()
+    vertex2segment = defaultdict(set)
     for segment in segment_list:
-        key0 = (segment.p0.x, segment.p0.y)
-        key1 = (segment.p1.x, segment.p1.y)
-        try:
-            v0 = coord2id[key0]
-        except KeyError:
-            v0 = coord2id[key0] = len(coord2id)
-            id2coord[v0] = key0
-        try:
-            v1 = coord2id[key1]
-        except KeyError:
-            v1 = coord2id[key1] = len(coord2id)
-            id2coord[v1]= key1
-        # By splitting the graph in 4 we can speed results up, but we still
-        # have to calculate the nodes that got lost in the middle.
-        # How do we do this recursively?
-        if (id2coord[v0][0] < width/2 and
-            id2coord[v0][1] < height/2 and
-            id2coord[v1][0] < width/2 and
-            id2coord[v1][1] < height/2):
-            G.add_edge(v0, v1)
-        elif (id2coord[v0][0] < width/2 and
-            id2coord[v0][1] > height/2 and
-            id2coord[v1][0] < width/2 and
-            id2coord[v1][1] > height/2):
-            G.add_edge(v0, v1)
-        elif (id2coord[v0][0] > width/2 and
-            id2coord[v0][1] < height/2 and
-            id2coord[v1][0] > width/2 and
-            id2coord[v1][1] < height/2):
-            G.add_edge(v0, v1)
-        elif (id2coord[v0][0] > width/2 and
-            id2coord[v0][1] > height/2 and
-            id2coord[v1][0] > width/2 and
-            id2coord[v1][1] > height/2):
-            G.add_edge(v0, v1)
+        # Adjacency list to make the BFS algorithm faster
+        vertex2segment[segment.p0].add(segment)
+        vertex2segment[segment.p1].add(segment)
+        # We begin the iteration through neighbor edges
+        # PRE: the edge is created in order [p0, p1]
+        queue = [(segment.p1, 5)]
+        while len(queue) > 0:
+            curr_vertex, jumps_left = queue.pop(0)
+            if jumps_left <= 0:
+                continue
+            for next_segment in vertex2segment[curr_vertex]:
+                if next_segment.p0 == segment.p0:
+                    # Same edge as the one I'm standing on
+                    continue
+                elif segment_counter[next_segment.as_norm] >1:
+                    # THis edge is used up
+                    continue
+                # I iterate through neighboring edges
+                raise NotImplementedError("Still working on it")
 
-    print(G)
-    start_ts = time.time()
-    cycles = nx.minimum_cycle_basis(G)
-    print(f"Elapsed time: {time.time() - start_ts:.3}")
-    start_ts = time.time()
-    for cycle in cycles:
-        xs = []
-        ys = []
-        if len(cycle) < 3:
-            continue
-        for v0, v1 in zip(cycle, cycle[1:] + [cycle[0]]):
-            p0 = id2coord[v0]
-            p1 = id2coord[v1]
-            xs.append(p0[0])
-            xs.append(p1[0])
-            ys.append(p0[1])
-            ys.append(p1[1])
-            # Update the polygon count too.
-            # The "if" here is because I need to normalize the segments.
-            # Otherwise they can be inserted twice.
-            if Point(p0[0], p0[1]).dist(Point(0, 0)) < Point(p1[0], p1[1]).dist(Point(0, 0)):
-                edge2count[(p0[0], p0[1], p1[0], p1[1])] += 1
-            else:
-                edge2count[(p1[0], p1[1], p0[0], p0[1])] += 1
-        center = (0.5 * min(xs) + 0.5 * max(xs), 0.5 * min(ys) + 0.5 * max(ys))
-        xs = [(i - center[0]) * (1 - 0.3) + center[0] for i in xs]
-        ys = [(i - center[1]) * (1 - 0.3) + center[1] for i in ys]
-        polygon = list(zip(xs, ys))
-        if len(polygon) > 2:
-            if random.random() < 0.95:
-                pygame.draw.polygon(canvas, (238, 219, 151), polygon)
-            else:
-                pygame.draw.polygon(canvas, (181, 238, 151), polygon)
-            pygame.draw.lines(canvas, 'black', False, polygon)
-
-                if random.random() < 0.5:
-                    img = pygame.image.load('tree.png').convert_alpha()
-                else:
-                    img = pygame.image.load('tower.png').convert_alpha()
-                canvas.blit(img, (polygon[0][0]+30, polygon[0][1]))
-    for outer_edge, outer_edge_count in edge2count.items():
-        if outer_edge_count == 1:
-            pygame.draw.line(canvas, 'red', (outer_edge[0], outer_edge[1]), (outer_edge[2], outer_edge[3]))
-    print(f"Elapsed time for drawing only: {time.time() - start_ts:.3}")
-    """
+                queue.append((next_segment, jumps_left - 1))
 
     coord2id = dict()
     id2coord = dict()
@@ -627,6 +670,7 @@ def main2():
     if len(extra_edges) > 0:
         print(f"Missing {len(extra_edges)} edges from graph")
     canvas.fill('white')
+    """
     for block in city_blocks:
         print(len(block))
         xs = list(map(lambda p: p.x, block))
@@ -645,4 +689,4 @@ def main2():
 if __name__ == '__main__':
     import cProfile
     cProfile.run('main2()', 'restats.prof')
-    time.sleep(10)
+    time.sleep(5)

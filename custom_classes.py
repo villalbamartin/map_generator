@@ -49,6 +49,10 @@ class Segment:
         else:
             return self.p1, self.p0
 
+    def as_norm(self):
+        p0, p1 = self.as_norm_points()
+        return Segment(p0, p1)
+
 
 def ccw(a: Point, b: Point, c: Point) -> bool:
     """ Auxiliar class that identifies whether three points are placed in
